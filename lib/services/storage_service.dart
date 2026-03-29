@@ -17,7 +17,7 @@ class StorageService {
   String? get accountID => _prefs.getString(_keyAccountID);
   set accountID(String? v) => v != null ? _prefs.setString(_keyAccountID, v) : _prefs.remove(_keyAccountID);
 
-  String get apiURL => _prefs.getString(_keyApiURL) ?? 'http://localhost:8080';
+  String get apiURL => _prefs.getString(_keyApiURL) ?? 'http://178.156.252.159:8080';
   set apiURL(String v) => _prefs.setString(_keyApiURL, v);
 
   String? get privateKey => _prefs.getString(_keyPrivateKey);

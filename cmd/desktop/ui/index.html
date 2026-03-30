@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blind VPN</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Login View -->
+<div id="view-login" class="view">
+  <div class="logo">&#9608; blind<span class="g">vpn</span></div>
+  <p class="sub">No account. No logs. No tracking.</p>
+  <button id="btn-create" class="btn-primary btn-full">Generate Account</button>
+  <div class="divider"><span>or</span></div>
+  <input id="input-login" type="text" maxlength="16" placeholder="Enter 16-digit account number" class="input">
+  <button id="btn-login" class="btn-outline btn-full">Log In</button>
+  <div id="login-error" class="error"></div>
+</div>
+
+<!-- Main View -->
+<div id="view-main" class="view" style="display:none">
+  <div class="topbar">
+    <div class="logo-sm">&#9608; blind<span class="g">vpn</span></div>
+    <button id="btn-logout" class="btn-text">Logout</button>
+  </div>
+
+  <div id="time-banner" class="time-banner" style="display:none">
+    <span id="time-text">No time remaining</span>
+    <a href="https://blind-vpn.com/account" target="_blank" class="btn-pay">Add Time</a>
+  </div>
+
+  <div class="status-area">
+    <button id="btn-connect" class="connect-btn disconnected">
+      <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+    </button>
+    <div id="status-text" class="status-text">Not Connected</div>
+    <div id="status-server" class="status-server"></div>
+  </div>
+
+  <div id="server-list" class="server-list">
+    <div class="section-label">SERVERS</div>
+  </div>
+
+  <div class="settings-toggles">
+    <label class="toggle"><input type="checkbox" id="chk-autostart"><span>Start on login</span></label>
+    <label class="toggle"><input type="checkbox" id="chk-autoconnect"><span>Auto-connect</span></label>
+    <label class="toggle"><input type="checkbox" id="chk-killswitch"><span>Kill switch</span></label>
+    <label class="toggle"><input type="checkbox" id="chk-padding"><span>Traffic padding</span></label>
+  </div>
+
+  <div class="account-bar">
+    <span id="account-display" class="mono"></span>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

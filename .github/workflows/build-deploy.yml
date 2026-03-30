@@ -15,7 +15,7 @@ jobs:
           go-version: 'stable'
 
       - name: Build Windows
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o blindvpn-windows.exe ./cmd/desktop
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui" -o blindvpn-windows.exe ./cmd/desktop
 
       - name: Build Linux
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o blindvpn-linux ./cmd/desktop

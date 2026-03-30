@@ -235,6 +235,31 @@ func (a *App) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleAccountInfo(w http.ResponseWriter, r *http.Request) {
+	// Login: if ?id= is provided, switch to that account
+	if id := r.URL.Query().Get("id"); id != "" && len(id) == 16 {
+		// Verify the account exists on the server
+		resp, err := apiGet(a.apiURL+"/v1/accounts/"+id, id)
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		a.accountID = id
+		// Generate keypair if we don't have one
+		if a.privKey == "" {
+			priv, pub, err := generateKeypair()
+			if err != nil {
+				jsonError(w, "keypair generation failed: "+err.Error(), 500)
+				return
+			}
+			a.privKey = priv
+			a.pubKey = pub
+		}
+		a.saveState()
+		resp["public_key"] = a.pubKey
+		jsonOK(w, resp)
+		return
+	}
+
 	if a.accountID == "" {
 		jsonError(w, "not logged in", 401)
 		return

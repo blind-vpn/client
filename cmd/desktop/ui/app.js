@@ -191,6 +191,7 @@ $('#btn-connect').onclick = async () => {
       await api('/disconnect', { method: 'POST' });
       state.connected = false;
       state.registration = null;
+      fetch('/api/tray/disconnected').catch(() => {});
     } catch (e) {
       alert('Disconnect failed: ' + e.message);
     }
@@ -235,6 +236,7 @@ $('#btn-connect').onclick = async () => {
 
     state.connected = true;
     state.registration = connInfo;
+    fetch('/api/tray/connected').catch(() => {});
   } catch (e) {
     alert('Connection failed:\n\n' + e.message);
     state.connected = false;

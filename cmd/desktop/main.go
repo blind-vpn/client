@@ -8,11 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 )
 
 //go:embed ui
@@ -58,15 +56,43 @@ func main() {
 		go app.autoConnect()
 	}
 
-	// Try native window (Windows WebView2), fall back to browser
-	if !openWindow(url) {
-		fmt.Printf("Blind VPN running at %s\n", url)
-		openBrowser(url)
+	// System tray icon
+	var tray *Tray
+	tray = NewTray(
+		func() { openBrowser(url) },          // Show
+		func() { /* TODO: quick connect */ },  // Connect
+		func() {                               // Disconnect
+			if app.tunnel != nil {
+				app.tunnel.Disconnect()
+				app.tunnel = nil
+			}
+			tray.SetConnected(false)
+		},
+		func() { // Quit
+			if app.tunnel != nil {
+				app.tunnel.Disconnect()
+			}
+			tray.Quit()
+		},
+	)
 
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
+	// Expose tray status updates via API so the UI JS can update the tray icon
+	mux.HandleFunc("/api/tray/connected", func(w http.ResponseWriter, r *http.Request) {
+		tray.SetConnected(true)
+		jsonOK(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/tray/disconnected", func(w http.ResponseWriter, r *http.Request) {
+		tray.SetConnected(false)
+		jsonOK(w, map[string]any{"ok": true})
+	})
+
+	// Open the window, then run the tray message loop
+	if !openWindow(url) {
+		openBrowser(url)
 	}
+
+	// Tray message loop blocks until Quit
+	tray.Run()
 
 	if app.tunnel != nil {
 		app.tunnel.Disconnect()

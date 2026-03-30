@@ -1,0 +1,52 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build Windows
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o blindvpn-windows.exe ./cmd/desktop
+
+      - name: Build Linux
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o blindvpn-linux ./cmd/desktop
+
+      - name: Build macOS
+        run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o blindvpn-macos ./cmd/desktop
+
+      - name: Checksums
+        run: sha256sum blindvpn-windows.exe blindvpn-linux blindvpn-macos > SHA256SUMS
+
+      - name: Deploy
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS_B64 }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "$KNOWN" | base64 -d > ~/.ssh/known_hosts
+          scp -i ~/.ssh/id_ed25519 blindvpn-windows.exe "${USER}@${HOST}:/opt/vpn/web/downloads/blindvpn-windows.exe"
+          scp -i ~/.ssh/id_ed25519 blindvpn-linux "${USER}@${HOST}:/opt/vpn/web/downloads/blindvpn-linux"
+          scp -i ~/.ssh/id_ed25519 blindvpn-macos "${USER}@${HOST}:/opt/vpn/web/downloads/blindvpn-macos.dmg"
+          scp -i ~/.ssh/id_ed25519 SHA256SUMS "${USER}@${HOST}:/opt/vpn/web/downloads/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blindvpn-all
+          path: |
+            blindvpn-windows.exe
+            blindvpn-linux
+            blindvpn-macos
+            SHA256SUMS

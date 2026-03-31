@@ -12,7 +12,7 @@
 <div id="view-login" class="view">
   <div class="logo">&#9608; blind<span class="g">vpn</span></div>
   <p class="sub">No account. No logs. No tracking.</p>
-  <button id="btn-create" class="btn-primary btn-full">Generate Account</button>
+  <button class="btn-primary btn-full" onclick="openExternal('https://blind-vpn.com')">Get an Account</button>
   <div class="divider"><span>or</span></div>
   <input id="input-login" type="text" maxlength="16" placeholder="Enter 16-digit account number" class="input">
   <button id="btn-login" class="btn-outline btn-full">Log In</button>
@@ -28,7 +28,7 @@
 
   <div id="time-banner" class="time-banner" style="display:none">
     <span id="time-text">No time remaining</span>
-    <a href="https://blind-vpn.com/account" target="_blank" class="btn-pay">Add Time</a>
+    <button class="btn-pay" onclick="openExternal('https://blind-vpn.com')">Add Time</button>
   </div>
 
   <div class="status-area">
@@ -46,8 +46,6 @@
   <div class="settings-toggles">
     <label class="toggle"><input type="checkbox" id="chk-autostart"><span>Start on login</span></label>
     <label class="toggle"><input type="checkbox" id="chk-autoconnect"><span>Auto-connect</span></label>
-    <label class="toggle"><input type="checkbox" id="chk-killswitch"><span>Kill switch</span></label>
-    <label class="toggle"><input type="checkbox" id="chk-padding"><span>Traffic padding</span></label>
   </div>
 
   <div class="account-bar">

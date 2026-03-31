@@ -49,22 +49,6 @@ async function init() {
 }
 
 // Login
-$('#btn-create').onclick = async () => {
-  $('#btn-create').disabled = true;
-  $('#btn-create').textContent = 'Generating...';
-  $('#login-error').textContent = '';
-  try {
-    const acct = await api('/account/create', { method: 'POST' });
-    $('#account-display').textContent = acct.account_id;
-    showMain();
-  } catch (e) {
-    $('#login-error').textContent = e.message;
-  } finally {
-    $('#btn-create').disabled = false;
-    $('#btn-create').textContent = 'Generate Account';
-  }
-};
-
 $('#btn-login').onclick = async () => {
   const id = $('#input-login').value.trim();
   if (id.length !== 16) {
@@ -141,18 +125,17 @@ function renderServers() {
   const list = $('#server-list');
   list.innerHTML = '<div class="section-label">LOCATION</div>';
   if (state.servers.length === 0) {
-    list.innerHTML += '<div style="color:var(--muted);font-size:13px;padding:8px 0;">No servers available</div>';
+    list.innerHTML += '<div style="color:var(--dim);font-size:13px;padding:8px 0;">No servers available</div>';
     return;
+  }
+
+  // Auto-select first server if none selected
+  if (!state.selectedServer) {
+    state.selectedServer = state.servers[0];
   }
 
   const sel = document.createElement('select');
   sel.className = 'server-select';
-  const placeholder = document.createElement('option');
-  placeholder.textContent = 'Select a location...';
-  placeholder.value = '';
-  placeholder.disabled = true;
-  placeholder.selected = !state.selectedServer;
-  sel.appendChild(placeholder);
 
   state.servers.forEach((s, i) => {
     const opt = document.createElement('option');
@@ -180,7 +163,7 @@ $('#btn-connect').onclick = async () => {
   if (state.connecting) return;
 
   if (state.expired) {
-    window.open('https://blind-vpn.com/account', '_blank');
+    openExternal('https://blind-vpn.com');
     return;
   }
 
@@ -200,10 +183,10 @@ $('#btn-connect').onclick = async () => {
     return;
   }
 
-  if (!state.selectedServer) {
-    alert('Select a server first');
-    return;
+  if (!state.selectedServer && state.servers.length > 0) {
+    state.selectedServer = state.servers[0];
   }
+  if (!state.selectedServer) return;
 
   state.connecting = true;
   updateConnectUI();
@@ -243,6 +226,7 @@ $('#btn-connect').onclick = async () => {
   }
 
   state.connecting = false;
+  state.connectProgress = null;
   updateConnectUI();
 };
 
@@ -267,7 +251,7 @@ function updateConnectUI() {
 
   if (state.connecting) {
     btn.classList.add('connecting');
-    text.textContent = state.connected ? 'Disconnecting...' : 'Connecting...';
+    text.textContent = state.connectProgress || (state.connected ? 'Disconnecting...' : 'Connecting...');
     text.className = 'status-text';
   } else if (state.connected) {
     btn.classList.add('connected');
@@ -290,8 +274,8 @@ async function loadSettings() {
     const s = await api('/settings');
     $('#chk-autostart').checked = s.autostart;
     $('#chk-autoconnect').checked = s.autoconnect;
-    $('#chk-killswitch').checked = s.kill_switch;
-    $('#chk-padding').checked = s.padding;
+
+
   } catch {}
 }
 
@@ -311,7 +295,31 @@ function bindToggle(id, key) {
 
 bindToggle('#chk-autostart', 'autostart');
 bindToggle('#chk-autoconnect', 'autoconnect');
-bindToggle('#chk-killswitch', 'kill_switch');
-bindToggle('#chk-padding', 'padding');
+
+
+
+function openExternal(url) {
+  fetch('/api/open?url=' + encodeURIComponent(url)).catch(() => {
+    window.open(url);
+  });
+}
+
+// Listen for server-sent events (progress, connect/disconnect)
+(function() {
+  function connectSSE() {
+    const es = new EventSource('/api/events');
+    es.onmessage = (e) => {
+      if (e.data.startsWith('progress:')) {
+        state.connectProgress = e.data.substring(9);
+        updateConnectUI();
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      setTimeout(connectSSE, 2000);
+    };
+  }
+  connectSSE();
+})();
 
 init();

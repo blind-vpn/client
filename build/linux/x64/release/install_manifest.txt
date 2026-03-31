@@ -1,0 +1,15 @@
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/vpnservice
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/icudtl.dat
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/lib/libflutter_linux_gtk.so
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/lib/native_assets.yaml
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/shaders/ink_sparkle.frag
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/AssetManifest.json
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/version.json
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/assets/fonts/Inter-Bold.ttf
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/assets/fonts/Inter-SemiBold.ttf
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/assets/fonts/Inter-Medium.ttf
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/assets/fonts/Inter-Regular.ttf
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/FontManifest.json
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/AssetManifest.bin
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/data/flutter_assets/NOTICES.Z
+/home/desktop/projects/vpnService/app/build/linux/x64/release/bundle/lib/libapp.so

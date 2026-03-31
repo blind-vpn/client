@@ -27,6 +27,7 @@ var (
 	pTranslateMessage    = user32.NewProc("TranslateMessage")
 	pDispatchMessage     = user32.NewProc("DispatchMessageW")
 	pPostQuitMessage     = user32.NewProc("PostQuitMessage")
+	pPostMessage         = user32.NewProc("PostMessageW")
 	pCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
 	pAppendMenu          = user32.NewProc("AppendMenuW")
 	pTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
@@ -43,11 +44,12 @@ const (
 	NIF_ICON    = 2
 	NIF_TIP     = 4
 	NIF_MESSAGE = 1
-	WM_USER     = 0x0400
-	WM_TRAYICON = WM_USER + 1
-	WM_COMMAND  = 0x0111
-	WM_RBUTTONUP = 0x0205
-	WM_LBUTTONDBLCLK = 0x0203
+	WM_USER            = 0x0400
+	WM_TRAYICON        = WM_USER + 1
+	WM_TRAY_UPDATE     = WM_USER + 2 // custom: update icon from main thread
+	WM_COMMAND         = 0x0111
+	WM_RBUTTONUP       = 0x0205
+	WM_LBUTTONDBLCLK   = 0x0203
 	IMAGE_ICON  = 1
 	LR_LOADFROMFILE = 0x0010
 	LR_DEFAULTSIZE  = 0x0040
@@ -125,7 +127,6 @@ func NewTray(onShow, onConnect, onDisconnect, onQuit func()) *Tray {
 }
 
 func (t *Tray) Run() {
-	// Extract icon files to temp
 	tmpDir, _ := os.MkdirTemp("", "blindvpn-tray")
 	connPath := filepath.Join(tmpDir, "connected.ico")
 	discPath := filepath.Join(tmpDir, "disconnected.ico")
@@ -179,18 +180,19 @@ func (t *Tray) Run() {
 	os.RemoveAll(tmpDir)
 }
 
+// SetConnected posts a message to the tray window thread to update the icon.
+// Safe to call from any goroutine.
 func (t *Tray) SetConnected(connected bool) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.connected = connected
-	if connected {
-		t.nid.HIcon = t.connectedIcon
-		copy(t.nid.SzTip[:], utf16("Blind VPN - Connected"))
-	} else {
-		t.nid.HIcon = t.disconnIcon
-		copy(t.nid.SzTip[:], utf16("Blind VPN - Disconnected"))
+	t.mu.Unlock()
+	if t.hwnd != 0 {
+		val := uintptr(0)
+		if connected {
+			val = 1
+		}
+		pPostMessage.Call(t.hwnd, WM_TRAY_UPDATE, val, 0)
 	}
-	pShellNotifyIcon.Call(NIM_MODIFY, uintptr(unsafe.Pointer(&t.nid)))
 }
 
 func (t *Tray) Quit() {
@@ -205,6 +207,17 @@ func trayWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	}
 
 	switch msg {
+	case WM_TRAY_UPDATE:
+		// Update icon on the message loop thread
+		if wParam == 1 {
+			t.nid.HIcon = t.connectedIcon
+			copy(t.nid.SzTip[:], utf16("Blind VPN - Connected"))
+		} else {
+			t.nid.HIcon = t.disconnIcon
+			copy(t.nid.SzTip[:], utf16("Blind VPN - Disconnected"))
+		}
+		pShellNotifyIcon.Call(NIM_MODIFY, uintptr(unsafe.Pointer(&t.nid)))
+
 	case WM_TRAYICON:
 		switch lParam {
 		case WM_RBUTTONUP:

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 )
 
 //go:embed ui
@@ -19,12 +21,19 @@ var uiFS embed.FS
 const defaultAPI = "https://blind-vpn.com"
 
 func main() {
+	// Handle /install flag
+	if len(os.Args) > 1 && os.Args[1] == "/install" {
+		if err := installService(); err != nil {
+			fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	app := NewApp(defaultAPI)
-
 	mux := http.NewServeMux()
-
-	// API routes — wrapped with CSRF protection
 	protected := csrfProtect(mux)
+
 	mux.HandleFunc("/api/account/create", app.handleCreateAccount)
 	mux.HandleFunc("/api/account/info", app.handleAccountInfo)
 	mux.HandleFunc("/api/servers", app.handleServers)
@@ -34,49 +43,57 @@ func main() {
 	mux.HandleFunc("/api/status", app.handleStatus)
 	mux.HandleFunc("/api/settings", app.handleSettings)
 	mux.HandleFunc("/api/settings/update", app.handleUpdateSettings)
+	mux.HandleFunc("/api/events", app.handleEvents)
 
-	// Serve embedded UI
+	mux.HandleFunc("/api/open", func(w http.ResponseWriter, r *http.Request) {
+		u := r.URL.Query().Get("url")
+		if u != "" && (strings.HasPrefix(u, "https://blind-vpn.com") || strings.HasPrefix(u, "https://www.blind-vpn.com")) {
+			openBrowser(u)
+		}
+		jsonOK(w, map[string]any{"ok": true})
+	})
+
 	uiContent, _ := fs.Sub(uiFS, "ui")
-	fileServer := http.FileServer(http.FS(uiContent))
-	mux.Handle("/", fileServer)
+	mux.Handle("/", http.FileServer(http.FS(uiContent)))
 
-	// Listen on random port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start: %v\n", err)
-		os.Exit(1)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-
-	go http.Serve(listener, protected)
-
-	// Autoconnect on startup
-	if app.settings.Autoconnect && app.settings.LastServer != nil && app.accountID != "" && app.privKey != "" {
-		go app.autoConnect()
+	// SERVICE MODE
+	if isServiceMode() {
+		runService(app, protected)
+		return
 	}
 
-	// System tray icon
+	// GUI MODE
+	if err := ensureSingleInstance(); err != nil {
+		os.Exit(0)
+	}
+
+	if err := ensureServiceInstalled(); err != nil {
+		fmt.Fprintf(os.Stderr, "Service setup failed: %v\n", err)
+		listener, err := net.Listen("tcp", servicePort)
+		if err != nil {
+			os.Exit(1)
+		}
+		go http.Serve(listener, protected)
+	}
+
+	url := "http://" + servicePort
+
+	// Tray icon
 	var tray *Tray
 	tray = NewTray(
-		func() { openBrowser(url) },          // Show
-		func() { /* TODO: quick connect */ },  // Connect
-		func() {                               // Disconnect
-			if app.tunnel != nil {
-				app.tunnel.Disconnect()
-				app.tunnel = nil
-			}
+		func() { go openWindow(url) },       // Show
+		func() { /* TODO: quick connect */ }, // Connect
+		func() {                              // Disconnect
+			http.Post("http://"+servicePort+"/api/disconnect", "", nil)
 			tray.SetConnected(false)
 		},
 		func() { // Quit
-			if app.tunnel != nil {
-				app.tunnel.Disconnect()
-			}
+			http.Post("http://"+servicePort+"/api/disconnect", "", nil)
 			tray.Quit()
 		},
 	)
 
-	// Expose tray status updates via API so the UI JS can update the tray icon
+	// Tray status updates
 	mux.HandleFunc("/api/tray/connected", func(w http.ResponseWriter, r *http.Request) {
 		tray.SetConnected(true)
 		jsonOK(w, map[string]any{"ok": true})
@@ -86,17 +103,44 @@ func main() {
 		jsonOK(w, map[string]any{"ok": true})
 	})
 
-	// Open the window, then run the tray message loop
-	if !openWindow(url) {
-		openBrowser(url)
-	}
+	// Subscribe to service events and update tray icon
+	go func() {
+		for {
+			resp, err := http.Get("http://" + servicePort + "/api/events")
+			if err != nil {
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			buf := make([]byte, 256)
+			for {
+				n, err := resp.Body.Read(buf)
+				if err != nil {
+					break
+				}
+				msg := strings.TrimSpace(string(buf[:n]))
+				for _, line := range strings.Split(msg, "\n") {
+					line = strings.TrimPrefix(line, "data: ")
+					switch line {
+					case "connected":
+						tray.SetConnected(true)
+					case "disconnected":
+						tray.SetConnected(false)
+					}
+				}
+			}
+			resp.Body.Close()
+			time.Sleep(1 * time.Second)
+		}
+	}()
 
-	// Tray message loop blocks until Quit
+	// Open window
+	go func() {
+		if !openWindow(url) {
+			openBrowser(url)
+		}
+	}()
+
 	tray.Run()
-
-	if app.tunnel != nil {
-		app.tunnel.Disconnect()
-	}
 }
 
 func openBrowser(url string) {
@@ -116,20 +160,86 @@ func openBrowser(url string) {
 type appSettings struct {
 	Autostart   bool
 	Autoconnect bool
-	KillSwitch  bool
-	Padding     bool
+
+
 	LastServer  *savedServer
 }
 
 // App holds all state
 type App struct {
-	apiURL    string
-	accountID string
-	privKey   string
-	pubKey    string
-	tunnel    *Tunnel
-	configDir string
-	settings  appSettings
+	apiURL      string
+	accountID   string
+	privKey     string
+	pubKey      string
+	tunnel      *Tunnel
+	configDir   string
+	settings    appSettings
+	eventSubs   []chan string
+	eventSubsMu sync.Mutex
+}
+
+// emit sends an event to all SSE subscribers.
+func (a *App) emit(event string) {
+	a.eventSubsMu.Lock()
+	defer a.eventSubsMu.Unlock()
+	for _, ch := range a.eventSubs {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
+}
+
+func (a *App) subscribe() chan string {
+	ch := make(chan string, 8)
+	a.eventSubsMu.Lock()
+	a.eventSubs = append(a.eventSubs, ch)
+	a.eventSubsMu.Unlock()
+	return ch
+}
+
+func (a *App) unsubscribe(ch chan string) {
+	a.eventSubsMu.Lock()
+	defer a.eventSubsMu.Unlock()
+	for i, c := range a.eventSubs {
+		if c == ch {
+			a.eventSubs = append(a.eventSubs[:i], a.eventSubs[i+1:]...)
+			break
+		}
+	}
+}
+
+func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ch := a.subscribe()
+	defer a.unsubscribe(ch)
+
+	// Send current state immediately
+	if a.tunnel != nil && a.tunnel.Connected {
+		fmt.Fprintf(w, "data: connected\n\n")
+	} else {
+		fmt.Fprintf(w, "data: disconnected\n\n")
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case event := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", event)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func NewApp(apiURL string) *App {
@@ -146,11 +256,12 @@ func NewApp(apiURL string) *App {
 
 func getConfigDir() string {
 	if runtime.GOOS == "windows" {
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = os.Getenv("USERPROFILE")
+		// Use ProgramData so both the service (SYSTEM) and the GUI (user) can access it
+		programData := os.Getenv("ProgramData")
+		if programData == "" {
+			programData = `C:\ProgramData`
 		}
-		return filepath.Join(appData, "BlindVPN")
+		return filepath.Join(programData, "BlindVPN")
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".blindvpn")
@@ -163,8 +274,8 @@ type appState struct {
 	PubKey         string       `json:"public_key"`
 	Autostart      bool         `json:"autostart"`
 	Autoconnect    bool         `json:"autoconnect"`
-	KillSwitch     bool         `json:"kill_switch"`
-	Padding        bool         `json:"padding"`
+
+
 	LastServer     *savedServer `json:"last_server,omitempty"`
 }
 
@@ -189,21 +300,18 @@ func (a *App) loadState() {
 	a.pubKey = s.PubKey
 	a.settings.Autostart = s.Autostart
 	a.settings.Autoconnect = s.Autoconnect
-	a.settings.KillSwitch = s.KillSwitch
-	a.settings.Padding = s.Padding
+
+
 	a.settings.LastServer = s.LastServer
 
-	// Decrypt private key (DPAPI on Windows, AES-GCM on others)
+	// Load private key — try encrypted first, fall back to plaintext
 	if len(s.PrivKeyEnc) > 0 {
 		dec, err := decryptCredential(s.PrivKeyEnc)
 		if err == nil {
 			a.privKey = string(dec)
-		} else {
-			// Migration: old unencrypted data — treat as plaintext, will be encrypted on next save
-			a.privKey = string(s.PrivKeyEnc)
 		}
-	} else if s.PrivKey != "" {
-		// Migration: old plaintext key — will be encrypted on next save
+	}
+	if a.privKey == "" && s.PrivKey != "" {
 		a.privKey = s.PrivKey
 	}
 }
@@ -214,19 +322,15 @@ func (a *App) saveState() {
 		AccountID:   a.accountID,
 		Autostart:   a.settings.Autostart,
 		Autoconnect: a.settings.Autoconnect,
-		KillSwitch:  a.settings.KillSwitch,
-		Padding:     a.settings.Padding,
+
+
 		LastServer:  a.settings.LastServer,
 	}
 
-	// Encrypt private key if possible (DPAPI on Windows)
+	// Always save plaintext key (service runs as SYSTEM, DPAPI won't work cross-user).
+	// The state file is in ProgramData with restricted permissions.
 	if a.privKey != "" {
-		enc, err := encryptCredential([]byte(a.privKey))
-		if err == nil && len(enc) > 0 {
-			s.PrivKeyEnc = enc
-		} else {
-			s.PrivKey = a.privKey // fallback to plaintext
-		}
+		s.PrivKey = a.privKey
 	}
 
 	data, _ := json.Marshal(s)
@@ -318,7 +422,7 @@ func (a *App) handleRegisterKey(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "not logged in or no keypair", 401)
 		return
 	}
-	resp, err := apiPost(a.apiURL+"/v1/keys", map[string]any{"pubkey": a.pubKey, "padding": a.settings.Padding}, a.accountID)
+	resp, err := apiPost(a.apiURL+"/v1/keys", map[string]any{"pubkey": a.pubKey}, a.accountID)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			keys, err2 := apiGet(a.apiURL+"/v1/keys", a.accountID)
@@ -333,6 +437,33 @@ func (a *App) handleRegisterKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, resp)
+}
+
+// doConnect is the single code path for all connections (UI and autoconnect).
+func (a *App) doConnect(srv *savedServer) error {
+	tunnel, err := NewTunnel(a.configDir)
+	if err != nil {
+		return err
+	}
+	tunnel.onProgress = func(msg string) { a.emit("progress:" + msg) }
+
+	err = tunnel.Connect(TunnelConfig{
+		PrivateKey:      a.privKey,
+		ServerPublicKey: srv.PubKey,
+		ServerEndpoint:  srv.IP,
+		ServerPort:      srv.Port,
+		TunnelAddress:   strings.TrimSuffix(srv.AllowedIP, "/32"),
+		DNS:             srv.IP,
+	})
+	if err != nil {
+		return err
+	}
+
+	a.tunnel = tunnel
+	a.settings.LastServer = srv
+	a.saveState()
+	a.emit("connected")
+	return nil
 }
 
 func (a *App) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -350,42 +481,28 @@ func (a *App) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	tunnel, err := NewTunnel(a.configDir)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	err = tunnel.Connect(TunnelConfig{
-		PrivateKey:      a.privKey,
-		ServerPublicKey: req.ServerPubKey,
-		ServerEndpoint:  req.ServerIP,
-		ServerPort:      req.ServerPort,
-		TunnelAddress:   strings.TrimSuffix(req.AllowedIP, "/32"),
-		DNS:             req.ServerIP,
-	})
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	a.tunnel = tunnel
-
-	// Save last server for autoconnect
-	a.settings.LastServer = &savedServer{
+	srv := &savedServer{
 		ID:        req.ServerID,
 		IP:        req.ServerIP,
 		PubKey:    req.ServerPubKey,
 		Port:      req.ServerPort,
 		AllowedIP: req.AllowedIP,
 	}
-	a.saveState()
 
-	if a.settings.KillSwitch {
-		enableKillSwitch(req.ServerIP)
+	if err := a.doConnect(srv); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
 	}
 
 	jsonOK(w, map[string]any{"status": "connected", "server_ip": req.ServerIP})
+}
+
+func (a *App) handleDisconnectDirect() {
+	if a.tunnel != nil {
+		a.tunnel.Disconnect()
+		a.tunnel = nil
+	}
+	a.emit("disconnected")
 }
 
 func (a *App) handleDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -393,7 +510,7 @@ func (a *App) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 		a.tunnel.Disconnect()
 		a.tunnel = nil
 	}
-	disableKillSwitch()
+	a.emit("disconnected")
 	jsonOK(w, map[string]any{"status": "disconnected"})
 }
 
@@ -414,8 +531,8 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"autostart":   a.settings.Autostart,
 		"autoconnect": a.settings.Autoconnect,
-		"kill_switch": a.settings.KillSwitch,
-		"padding":     a.settings.Padding,
+
+
 	})
 }
 
@@ -423,8 +540,8 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Autostart   *bool `json:"autostart"`
 		Autoconnect *bool `json:"autoconnect"`
-		KillSwitch  *bool `json:"kill_switch"`
-		Padding     *bool `json:"padding"`
+
+
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -435,47 +552,12 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if req.Autoconnect != nil {
 		a.settings.Autoconnect = *req.Autoconnect
 	}
-	if req.KillSwitch != nil {
-		a.settings.KillSwitch = *req.KillSwitch
-		if *req.KillSwitch && a.tunnel != nil && a.tunnel.Connected {
-			enableKillSwitch(a.tunnel.ServerIP)
-		} else if !*req.KillSwitch {
-			disableKillSwitch()
-		}
-	}
-	if req.Padding != nil {
-		a.settings.Padding = *req.Padding
-	}
+
 
 	a.saveState()
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (a *App) autoConnect() {
-	srv := a.settings.LastServer
-
-	tunnel, err := NewTunnel(a.configDir)
-	if err != nil {
-		return
-	}
-
-	err = tunnel.Connect(TunnelConfig{
-		PrivateKey:      a.privKey,
-		ServerPublicKey: srv.PubKey,
-		ServerEndpoint:  srv.IP,
-		ServerPort:      srv.Port,
-		TunnelAddress:   strings.TrimSuffix(srv.AllowedIP, "/32"),
-		DNS:             srv.IP,
-	})
-	if err != nil {
-		return
-	}
-
-	a.tunnel = tunnel
-	if a.settings.KillSwitch {
-		enableKillSwitch(srv.IP)
-	}
-}
 
 func jsonOK(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")

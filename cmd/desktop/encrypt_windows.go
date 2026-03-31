@@ -29,12 +29,14 @@ func newBlob(d []byte) *dataBlob {
 	}
 }
 
-// encryptCredential encrypts data using Windows DPAPI (current user scope).
+// encryptCredential encrypts data using Windows DPAPI (machine scope,
+// so both the user process and the SYSTEM service can decrypt).
 func encryptCredential(plaintext []byte) ([]byte, error) {
+	const CRYPTPROTECT_LOCAL_MACHINE = 0x04
 	var outBlob dataBlob
 	r, _, err := procEncrypt.Call(
 		uintptr(unsafe.Pointer(newBlob(plaintext))),
-		0, 0, 0, 0, 0,
+		0, 0, 0, 0, CRYPTPROTECT_LOCAL_MACHINE,
 		uintptr(unsafe.Pointer(&outBlob)),
 	)
 	if r == 0 {
@@ -47,12 +49,13 @@ func encryptCredential(plaintext []byte) ([]byte, error) {
 	return out, nil
 }
 
-// decryptCredential decrypts DPAPI-encrypted data.
+// decryptCredential decrypts DPAPI-encrypted data (machine scope).
 func decryptCredential(ciphertext []byte) ([]byte, error) {
+	const CRYPTPROTECT_LOCAL_MACHINE = 0x04
 	var outBlob dataBlob
 	r, _, err := procDecrypt.Call(
 		uintptr(unsafe.Pointer(newBlob(ciphertext))),
-		0, 0, 0, 0, 0,
+		0, 0, 0, 0, CRYPTPROTECT_LOCAL_MACHINE,
 		uintptr(unsafe.Pointer(&outBlob)),
 	)
 	if r == 0 {
